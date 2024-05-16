@@ -62,11 +62,10 @@ def process_host_updates(host_updates):
             host_update = host_updates.get(timeout=5)
         except queue.Empty:
             if updated:
-                print("# /etc/hosts START")
-                for (address, hostnames) in addresses.items():
-                    if len(hostnames) > 0:
-                        print(f"{address} {' '.join(hostnames)}")
-                print("# /etc/hosts DONE")
+                with open("/Users/steven/.local/share/docker-dns/hosts", "w") as hosts_file:
+                    for (address, hostnames) in addresses.items():
+                        if len(hostnames) > 0:
+                            print(f"{address} {' '.join(hostnames)}", file=hosts_file)
                 updated = False
             continue
 
@@ -84,7 +83,7 @@ def process_host_updates(host_updates):
                     updated = True
 
 def backfill_all_hosts(host_updates):
-    time.sleep(2)
+    time.sleep(1)
     for container in client.containers.list():
         for (network_name, network_settings) in container.attrs['NetworkSettings']['Networks'].items():
             host_updates.put(
