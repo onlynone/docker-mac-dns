@@ -1,11 +1,43 @@
 #!/usr/bin/env python3
 
+from socketserver import TCPServer
 import threading
 import time
 import queue
 
 from collections import defaultdict
+from typing import Mapping
+from dnserver.load_records import Records
+from dnserver.main import BaseResolver, ProxyResolver, logger, DEFAULT_PORT, DEFAULT_UPSTREAM
+from dnslib.server import DNSServer as LibDNSServer
+import dnslib
+import dnslib.zoneresolver
 import docker
+
+from dnserver import DNSServer, Zone
+
+class DNSServerWithAddress(DNSServer):
+    def __init__(self, records: Records | None = None, address: str | None = None, port: int | str | None = ..., upstream: str | None = ...):
+        super().__init__(records, port, upstream)
+        self.address = address
+
+    def start(self):
+        if self.address is None:
+            return super().start()
+
+        if self.upstream:
+            logger.info('starting DNS server on port %d, upstream DNS server "%s"', self.port, self.upstream)
+            resolver = ProxyResolver(self.records, self.upstream)
+        else:
+            logger.info('starting DNS server on port %d, without upstream DNS server', self.port)
+            resolver = BaseResolver(self.records)
+
+        self.udp_server = LibDNSServer(resolver, address=self.address, port=self.port)
+        self.tcp_server = LibDNSServer(resolver, address=self.address, port=self.port, tcp=True)
+        self.udp_server.start_thread()
+        self.tcp_server.start_thread()
+
+dns_server = DNSServerWithAddress(address="127.0.0.1", port=0, upstream=None)
 
 client = docker.from_env()
 container_starts = queue.Queue()
@@ -53,10 +85,11 @@ def process_network_disconnects(network_disconnects, host_updates):
 
         network_disconnects.task_done()
 
-def process_host_updates(host_updates):
-    names = {}
-    addresses = defaultdict(dict)
+def process_host_updates(host_updates, dns_server_address):
+    names: Mapping[str,str] = {}
+    addresses: Mapping[str,Mapping[str,True]] = defaultdict(dict)
     updated = False
+
     while True:
         try:
             host_update = host_updates.get(timeout=5)
@@ -66,7 +99,15 @@ def process_host_updates(host_updates):
                     for (address, hostnames) in addresses.items():
                         if len(hostnames) > 0:
                             print(f"{address} {' '.join(hostnames)}", file=hosts_file)
+                dns_server.set_records([Zone(hostname, "A", address) for (hostname, address) in names.items()])
+
+                for domain in {hostname.split('.')[-1] for hostname in names}:
+                    with open(f"/etc/resolver/{domain}", "w") as f:
+                        print(f"nameserver {dns_server_address[0]}", file=f)
+                        print(f"port {dns_server_address[1]}", file=f)
+
                 updated = False
+
             continue
 
         if host_update["action"] == "add":
@@ -95,10 +136,13 @@ def backfill_all_hosts(host_updates):
                 }
             )
 
+dns_server.start()
+dns_server_address = dns_server.udp_server.server.server_address
+
 gather_events_thread = threading.Thread(target=gather_events, args=(container_starts,), daemon=False)
 process_container_starts_thread = threading.Thread(target=process_container_starts, args=(container_starts, host_updates), daemon=True)
 process_network_disconnects_thread = threading.Thread(target=process_network_disconnects, args=(network_disconnects, host_updates), daemon=True)
-process_host_updates_thread = threading.Thread(target=process_host_updates, args=(host_updates,), daemon=True)
+process_host_updates_thread = threading.Thread(target=process_host_updates, args=(host_updates, dns_server_address), daemon=True)
 backfill_all_hosts_thread = threading.Thread(target=backfill_all_hosts, args=(host_updates,), daemon=False)
 
 process_host_updates_thread.start()
@@ -106,3 +150,7 @@ process_container_starts_thread.start()
 process_network_disconnects_thread.start()
 gather_events_thread.start()
 backfill_all_hosts_thread.start()
+
+
+gather_events_thread.join()
+dns_server.stop()
