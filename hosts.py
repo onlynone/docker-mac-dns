@@ -12,6 +12,7 @@ from dnserver.main import BaseResolver, ProxyResolver, logger, DEFAULT_PORT, DEF
 from dnslib.server import DNSServer as LibDNSServer
 import dnslib
 import dnslib.zoneresolver
+import dnslib.server
 import docker
 
 from dnserver import DNSServer, Zone
@@ -37,10 +38,14 @@ class DNSServerWithAddress(DNSServer):
         self.udp_server.start_thread()
         self.tcp_server.start_thread()
 
-dns_server = DNSServerWithAddress(address="127.0.0.1", port=0, upstream=None)
+# dns_server = DNSServerWithAddress(address="127.0.0.1", port=0, upstream=None)
 
 
 zone_resolver = dnslib.zoneresolver.ZoneResolver("")
+udp_server = dnslib.server.DNSServer(
+    zone_resolver,
+    port=0,
+    address="127.0.0.1")
 
 client = docker.from_env()
 container_starts = queue.Queue()
@@ -102,13 +107,10 @@ def process_host_updates(host_updates, dns_server_address):
                     for (address, hostnames) in addresses.items():
                         if len(hostnames) > 0:
                             print(f"{address} {' '.join(hostnames)}", file=hosts_file)
-                old_dns_server_records = []
                 new_dns_server_records = []
                 for (hostname, address) in names.items():
-                    old_dns_server_records.append(Zone(hostname, "A", address))
-                    rr = dnslib.RR(rname=hostname, rtype=dnslib.QTYPE.A, rclass=dnslib.CLASS.IN, ttl=5, rdata=address)
+                    rr = dnslib.RR(rname=hostname, rtype=dnslib.QTYPE.A, rclass=dnslib.CLASS.IN, ttl=5, rdata=dnslib.A(address))
                     new_dns_server_records.append((rr.rname,dnslib.QTYPE[rr.rtype],rr))
-                dns_server.set_records(old_dns_server_records)
                 zone_resolver.zone = new_dns_server_records
 
                 for domain in {hostname.split('.')[-1] for hostname in names}:
@@ -146,8 +148,8 @@ def backfill_all_hosts(host_updates):
                 }
             )
 
-dns_server.start()
-dns_server_address = dns_server.udp_server.server.server_address
+udp_server.start_thread()
+dns_server_address = udp_server.server.server_address
 
 gather_events_thread = threading.Thread(target=gather_events, args=(container_starts,), daemon=False)
 process_container_starts_thread = threading.Thread(target=process_container_starts, args=(container_starts, host_updates), daemon=True)
@@ -163,4 +165,5 @@ backfill_all_hosts_thread.start()
 
 
 gather_events_thread.join()
-dns_server.stop()
+udp_server.stop()
+udp_server.server.server_close()
