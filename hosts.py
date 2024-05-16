@@ -39,6 +39,9 @@ class DNSServerWithAddress(DNSServer):
 
 dns_server = DNSServerWithAddress(address="127.0.0.1", port=0, upstream=None)
 
+
+zone_resolver = dnslib.zoneresolver.ZoneResolver("")
+
 client = docker.from_env()
 container_starts = queue.Queue()
 network_disconnects = queue.Queue()
@@ -99,7 +102,14 @@ def process_host_updates(host_updates, dns_server_address):
                     for (address, hostnames) in addresses.items():
                         if len(hostnames) > 0:
                             print(f"{address} {' '.join(hostnames)}", file=hosts_file)
-                dns_server.set_records([Zone(hostname, "A", address) for (hostname, address) in names.items()])
+                old_dns_server_records = []
+                new_dns_server_records = []
+                for (hostname, address) in names.items():
+                    old_dns_server_records.append(Zone(hostname, "A", address))
+                    rr = dnslib.RR(rname=hostname, rtype=dnslib.QTYPE.A, rclass=dnslib.CLASS.IN, ttl=5, rdata=address)
+                    new_dns_server_records.append((rr.rname,dnslib.QTYPE[rr.rtype],rr))
+                dns_server.set_records(old_dns_server_records)
+                zone_resolver.zone = new_dns_server_records
 
                 for domain in {hostname.split('.')[-1] for hostname in names}:
                     with open(f"/etc/resolver/{domain}", "w") as f:
