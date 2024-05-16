@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import os
-from socketserver import TCPServer
 import threading
 import time
 import queue
@@ -21,7 +20,7 @@ os.makedirs(user_share_dir, exist_ok=True)
 user_share_hosts_filename = os.path.join(user_share_dir, "hosts")
 
 zone_resolver = dnslib.zoneresolver.ZoneResolver("")
-udp_server = dnslib.server.DNSServer(
+dns_server = dnslib.server.DNSServer(
     zone_resolver,
     port=0,
     address="127.0.0.1")
@@ -133,8 +132,8 @@ def backfill_all_hosts(host_updates):
                 }
             )
 
-udp_server.start_thread()
-dns_server_address = udp_server.server.server_address
+dns_server.start_thread()
+dns_server_address = dns_server.server.server_address
 
 gather_events_thread = threading.Thread(target=gather_events, args=(container_starts,), daemon=False)
 process_container_starts_thread = threading.Thread(target=process_container_starts, args=(container_starts, host_updates), daemon=True)
@@ -151,8 +150,8 @@ backfill_all_hosts_thread.start()
 try:
     gather_events_thread.join()
 finally:
-    udp_server.stop()
-    udp_server.server.server_close()
+    dns_server.stop()
+    dns_server.server.server_close()
     file_paths = set()
     while True:
         try:
