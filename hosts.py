@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import sys
 import threading
 import time
 import queue
@@ -46,6 +47,9 @@ def process_container_starts(container_starts, host_updates):
         container_start = container_starts.get()
         container = client.containers.get(container_start["id"])
         for (network_name, network_settings) in container.attrs['NetworkSettings']['Networks'].items():
+            if network_settings["DNSNames"] is None:
+                print(f'process_container_starts: No DNSNames for container: {container.attrs["Id"]} / {container.attrs["Name"]}', file=sys.stderr)
+                continue
             host_updates.put(
                 {
                  "action": "add",
@@ -62,6 +66,9 @@ def process_network_disconnects(network_disconnects, host_updates):
         network_disconnect = network_disconnects.get()
         container = client.containers.get(network_disconnect["Actor"]["Attributes"]["container"])
         for (network_name, network_settings) in container.attrs['NetworkSettings']['Networks'].items():
+            if network_settings["DNSNames"] is None:
+                print(f'process_network_disconnects: No DNSNames for container: {container.attrs["Id"]} / {container.attrs["Name"]}', file=sys.stderr)
+                continue
             host_updates.put(
                 {
                  "action": "remove",
